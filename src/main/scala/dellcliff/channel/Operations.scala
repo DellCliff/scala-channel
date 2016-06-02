@@ -1,7 +1,5 @@
 package dellcliff.channel
 
-import scala.concurrent.Promise
-
 
 trait WaitingOperation
 
