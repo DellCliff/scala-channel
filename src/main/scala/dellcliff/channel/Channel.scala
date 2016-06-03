@@ -4,6 +4,8 @@ import scala.concurrent.{Future, Promise}
 
 
 trait Channel[T] {
+  def isClosed: Boolean
+
   def close(): Unit
 
   def put(v: T): Future[Boolean]
@@ -17,44 +19,64 @@ private object PChannel {
 }
 
 private class PChannel[T](buffer: Buffer[T]) extends Channel[T] {
-  private val noneFuture = Promise.successful[Option[T]](None).future
+  private lazy val noneFuture = Promise.successful[Option[T]](None).future
   private var closed = false
   private val lock = new Object
 
+  override def isClosed: Boolean = lock.synchronized {
+    closed
+  }
+
   override def close(): Unit = lock.synchronized {
     closed = true
+
+    var put: Option[ParkedPut[T]] = None
+    while ( {
+      put = buffer.dequeuePut()
+      put.isDefined
+    }) {
+      put.get.put(false)
+    }
+
+    var take: Option[ParkedTake[T]] = None
+    while ( {
+      take = buffer.dequeueTake()
+      take.isDefined
+    }) {
+      take.get.take(None)
+    }
   }
 
   override def put(v: T): Future[Boolean] = lock.synchronized {
     closed match {
       case true => PChannel.falseFuture
-      case false => buffer.dequeueWaitingTake() match {
+      case false => buffer.dequeueTake() match {
         case None =>
           val promise = Promise[Boolean]()
           val cb: Boolean => Unit = { b =>
             promise.success(b)
           }
-          buffer.enqueueWaitingPut(WaitingPut(v, cb)) match {
+          buffer.enqueuePut(ParkedPut(v, cb)) match {
             case true => promise.future
             case false => PChannel.falseFuture
           }
         case Some(waitingTake) =>
-          waitingTake.take(v)
+          waitingTake.take(Some(v))
           PChannel.trueFuture
       }
     }
   }
 
   override def take(): Future[Option[T]] = lock.synchronized {
-    buffer.dequeueWaitingPut() match {
+    buffer.dequeuePut() match {
       case None => closed match {
         case true => noneFuture
         case false =>
           val p = Promise[Option[T]]()
-          val cb: T => Unit = { v =>
-            p.success(Some(v))
+          val cb: Option[T] => Unit = { v =>
+            p.success(v)
           }
-          buffer.enqueueWaitingTake(WaitingTake(cb)) match {
+          buffer.enqueueTake(ParkedTake(cb)) match {
             case true => p.future
             case false => noneFuture
           }
@@ -70,9 +92,9 @@ private class PChannel[T](buffer: Buffer[T]) extends Channel[T] {
 object Channel {
   def apply[T]() = chan[T]()
 
-  def chan[T](): Channel[T] = new PChannel[T](new FixedSize(1))
+  def chan[T](): Channel[T] = new PChannel[T](new DroppingBuffer(1))
 
-  def chan[T](size: Long): Channel[T] = new PChannel[T](new FixedSize(size))
+  def chan[T](size: Long): Channel[T] = new PChannel[T](new DroppingBuffer(size))
 
   def chan[T](buffer: Buffer[T]): Channel[T] = new PChannel[T](buffer)
 

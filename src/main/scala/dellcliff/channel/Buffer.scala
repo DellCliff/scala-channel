@@ -2,98 +2,64 @@ package dellcliff.channel
 
 
 trait Buffer[T] {
-  def dequeueWaitingTake(): Option[WaitingTake[T]]
+  def dequeueTake(): Option[ParkedTake[T]]
 
-  def dequeueWaitingPut(): Option[WaitingPut[T]]
+  def dequeuePut(): Option[ParkedPut[T]]
 
-  def enqueueWaitingTake(t: WaitingTake[T]): Boolean
+  def enqueueTake(t: ParkedTake[T]): Boolean
 
-  def enqueueWaitingPut(p: WaitingPut[T]): Boolean
+  def enqueuePut(p: ParkedPut[T]): Boolean
 }
 
-private class FixedSize[T](size: Long) extends Buffer[T] {
-  private val buffer = scala.collection.mutable.Queue[WaitingOperation]()
-  private val lock = new Object
+private abstract class QueueBuffer[T] extends Buffer[T] {
+  protected val buffer = scala.collection.mutable.Queue[ParkedOperation]()
+  protected val lock = new Object
 
-  override def dequeueWaitingTake(): Option[WaitingTake[T]] = lock.synchronized {
-    buffer.dequeueFirst(_.isInstanceOf[WaitingTake[_]])
-      .map(_.asInstanceOf[WaitingTake[T]])
+  override def dequeueTake(): Option[ParkedTake[T]] = lock.synchronized {
+    buffer.dequeueFirst(_.isInstanceOf[ParkedTake[_]])
+      .map(_.asInstanceOf[ParkedTake[T]])
   }
 
-  override def dequeueWaitingPut(): Option[WaitingPut[T]] = lock.synchronized {
-    buffer.dequeueFirst(_.isInstanceOf[WaitingPut[_]])
-      .map(_.asInstanceOf[WaitingPut[T]])
-  }
-
-  override def enqueueWaitingPut(p: WaitingPut[T]): Boolean = lock.synchronized {
-    buffer.length >= size match {
-      case true => false
-      case false =>
-        buffer.enqueue(p)
-        true
-    }
-  }
-
-  override def enqueueWaitingTake(t: WaitingTake[T]): Boolean = lock.synchronized {
-    buffer.length >= size match {
-      case true => false
-      case false =>
-        buffer.enqueue(t)
-        true
-    }
+  override def dequeuePut(): Option[ParkedPut[T]] = lock.synchronized {
+    buffer.dequeueFirst(_.isInstanceOf[ParkedPut[_]])
+      .map(_.asInstanceOf[ParkedPut[T]])
   }
 }
 
-private class SlidingBuffer[T](size: Long) extends Buffer[T] {
-  private val buffer = scala.collection.mutable.Queue[WaitingOperation]()
-  private val lock = new Object
-
-  override def dequeueWaitingTake(): Option[WaitingTake[T]] = lock.synchronized {
-    buffer.dequeueFirst(_.isInstanceOf[WaitingTake[_]])
-      .map(_.asInstanceOf[WaitingTake[T]])
-  }
-
-  override def dequeueWaitingPut(): Option[WaitingPut[T]] = lock.synchronized {
-    buffer.dequeueFirst(_.isInstanceOf[WaitingPut[_]])
-      .map(_.asInstanceOf[WaitingPut[T]])
-  }
-
-  override def enqueueWaitingPut(p: WaitingPut[T]): Boolean = lock.synchronized {
+private class SlidingBuffer[T](size: Long) extends QueueBuffer[T] {
+  override def enqueuePut(p: ParkedPut[T]): Boolean = lock.synchronized {
     if (size == 0) false
     else {
-      while (buffer.length >= size && size > 0)
-        buffer.dequeue()
+      while (buffer.length >= size) {
+        buffer.dequeue() match {
+          case ParkedPut(value, put) => put(false)
+          case ParkedTake(take) => take(None)
+          case ignore =>
+        }
+      }
       buffer.enqueue(p)
       true
     }
   }
 
-  override def enqueueWaitingTake(t: WaitingTake[T]): Boolean = lock.synchronized {
+  override def enqueueTake(t: ParkedTake[T]): Boolean = lock.synchronized {
     if (size == 0) false
     else {
-      while (buffer.length >= size && size > 0)
-        buffer.dequeue()
+      while (buffer.length >= size) {
+        buffer.dequeue() match {
+          case ParkedPut(value, put) => put(false)
+          case ParkedTake(take) => take(None)
+          case ignore =>
+        }
+      }
       buffer.enqueue(t)
       true
     }
   }
 }
 
-private class DroppingBuffer[T](size: Long) extends Buffer[T] {
-  private val buffer = scala.collection.mutable.Queue[WaitingOperation]()
-  private val lock = new Object
-
-  override def dequeueWaitingTake(): Option[WaitingTake[T]] = lock.synchronized {
-    buffer.dequeueFirst(_.isInstanceOf[WaitingTake[_]])
-      .map(_.asInstanceOf[WaitingTake[T]])
-  }
-
-  override def dequeueWaitingPut(): Option[WaitingPut[T]] = lock.synchronized {
-    buffer.dequeueFirst(_.isInstanceOf[WaitingPut[_]])
-      .map(_.asInstanceOf[WaitingPut[T]])
-  }
-
-  override def enqueueWaitingPut(p: WaitingPut[T]): Boolean = lock.synchronized {
+private class DroppingBuffer[T](size: Long) extends QueueBuffer[T] {
+  override def enqueuePut(p: ParkedPut[T]): Boolean = lock.synchronized {
     if (size == 0 || buffer.length >= size) false
     else {
       buffer.enqueue(p)
@@ -101,7 +67,7 @@ private class DroppingBuffer[T](size: Long) extends Buffer[T] {
     }
   }
 
-  override def enqueueWaitingTake(t: WaitingTake[T]): Boolean = lock.synchronized {
+  override def enqueueTake(t: ParkedTake[T]): Boolean = lock.synchronized {
     if (size == 0 || buffer.length >= size) false
     else {
       buffer.enqueue(t)
