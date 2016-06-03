@@ -30,21 +30,11 @@ private class PChannel[T](buffer: Buffer[T]) extends Channel[T] {
   override def close(): Unit = lock.synchronized {
     closed = true
 
-    var put: Option[ParkedPut[T]] = None
-    while ( {
-      put = buffer.dequeuePut()
-      put.isDefined
-    }) {
-      put.get.put(false)
-    }
-
     var take: Option[ParkedTake[T]] = None
     while ( {
       take = buffer.dequeueTake()
       take.isDefined
-    }) {
-      take.get.take(None)
-    }
+    }) take.get.take(None)
   }
 
   override def put(v: T): Future[Boolean] = lock.synchronized {
