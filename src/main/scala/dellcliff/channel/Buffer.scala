@@ -6,9 +6,9 @@ trait Buffer[T] {
 
   def dequeuePut(): Option[ParkedPut[T]]
 
-  def enqueueTake(t: ParkedTake[T]): Boolean
+  def enqueueTake(take: ParkedTake[T]): Boolean
 
-  def enqueuePut(p: ParkedPut[T]): Boolean
+  def enqueuePut(put: ParkedPut[T]): Boolean
 }
 
 private abstract class QueueBuffer[T] extends Buffer[T] {
@@ -32,8 +32,8 @@ private class SlidingBuffer[T](size: Long) extends QueueBuffer[T] {
     else {
       while (buffer.length >= size) {
         buffer.dequeue() match {
-          case ParkedPut(value, put) => put(false)
-          case ParkedTake(take) => take(None)
+          case ParkedPut(_, callback) => callback(Some(DroppedFromBuffer))
+          case ParkedTake(callback) => callback(Left(DroppedFromBuffer))
           case ignore =>
         }
       }
@@ -47,8 +47,8 @@ private class SlidingBuffer[T](size: Long) extends QueueBuffer[T] {
     else {
       while (buffer.length >= size) {
         buffer.dequeue() match {
-          case ParkedPut(value, put) => put(false)
-          case ParkedTake(take) => take(None)
+          case ParkedPut(value, callback) => callback(Some(DroppedFromBuffer))
+          case ParkedTake(callback) => callback(Left(DroppedFromBuffer))
           case ignore =>
         }
       }

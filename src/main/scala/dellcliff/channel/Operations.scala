@@ -1,8 +1,17 @@
 package dellcliff.channel
 
 
-trait ParkedOperation
+sealed trait Failure
 
-case class ParkedTake[T](take: Option[T] => Unit) extends ParkedOperation
+case object ChannelClosed extends Failure
 
-case class ParkedPut[T](value: T, put: Boolean => Unit) extends ParkedOperation
+case object DroppedFromBuffer extends Failure
+
+
+sealed trait ParkedOperation
+
+sealed case class ParkedTake[T](callback: Either[Failure, T] => Unit)
+  extends ParkedOperation
+
+sealed case class ParkedPut[T](value: T, callback: Option[Failure] => Unit)
+  extends ParkedOperation

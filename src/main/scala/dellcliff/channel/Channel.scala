@@ -8,18 +8,12 @@ trait Channel[T] {
 
   def close(): Unit
 
-  def put(v: T): Future[Boolean]
+  def put(v: T): Future[Option[Failure]]
 
-  def take(): Future[Option[T]]
-}
-
-private object PChannel {
-  private val falseFuture = Promise.successful(false).future
-  private val trueFuture = Promise.successful(true).future
+  def take(): Future[Either[Failure, T]]
 }
 
 private class PChannel[T](buffer: Buffer[T]) extends Channel[T] {
-  private lazy val noneFuture = Promise.successful[Option[T]](None).future
   private var closed = false
   private val lock = new Object
 
@@ -34,46 +28,46 @@ private class PChannel[T](buffer: Buffer[T]) extends Channel[T] {
     while ( {
       take = buffer.dequeueTake()
       take.isDefined
-    }) take.get.take(None)
+    }) take.get.callback(Left(ChannelClosed))
   }
 
-  override def put(v: T): Future[Boolean] = lock.synchronized {
+  override def put(v: T): Future[Option[Failure]] = lock.synchronized {
     closed match {
-      case true => PChannel.falseFuture
+      case true => Promise.successful(Some(ChannelClosed)).future
       case false => buffer.dequeueTake() match {
         case None =>
-          val promise = Promise[Boolean]()
-          val cb: Boolean => Unit = { b =>
+          val promise = Promise[Option[Failure]]()
+          val cb: Option[Failure] => Unit = { b =>
             promise.success(b)
           }
           buffer.enqueuePut(ParkedPut(v, cb)) match {
             case true => promise.future
-            case false => PChannel.falseFuture
+            case false => Promise.successful(Some(DroppedFromBuffer)).future
           }
         case Some(waitingTake) =>
-          waitingTake.take(Some(v))
-          PChannel.trueFuture
+          waitingTake.callback(Right(v))
+          Promise.successful(None).future
       }
     }
   }
 
-  override def take(): Future[Option[T]] = lock.synchronized {
+  override def take(): Future[Either[Failure, T]] = lock.synchronized {
     buffer.dequeuePut() match {
       case None => closed match {
-        case true => noneFuture
+        case true => Promise.successful(Left(ChannelClosed)).future
         case false =>
-          val p = Promise[Option[T]]()
-          val cb: Option[T] => Unit = { v =>
+          val p = Promise[Either[Failure, T]]()
+          val cb: Either[Failure, T] => Unit = { v =>
             p.success(v)
           }
           buffer.enqueueTake(ParkedTake(cb)) match {
             case true => p.future
-            case false => noneFuture
+            case false => Promise.successful(Left(DroppedFromBuffer)).future
           }
       }
       case Some(waitingPut) =>
-        val promise = Promise.successful(Some(waitingPut.value))
-        waitingPut.put(true)
+        val promise = Promise.successful(Right(waitingPut.value))
+        waitingPut.callback(None)
         promise.future
     }
   }
